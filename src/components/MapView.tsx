@@ -1,10 +1,10 @@
-import { MapContainer, TileLayer, Marker, Popup, Polyline, useMap } from 'react-leaflet';
+import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Collector, Task } from '@/types/tracker';
+import { Collector } from '@/types/tracker';
 import { formatDistanceToNow } from 'date-fns';
 
-// Fix for default marker icons in React-Leaflet
+// Fix for default marker icons
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 
 const createCollectorIcon = (status: string) => {
@@ -89,25 +89,6 @@ interface MapViewProps {
   showClients?: boolean;
 }
 
-const FitBounds = ({ collectors, selectedCollector }: { collectors: Collector[]; selectedCollector: Collector | null }) => {
-  const map = useMap();
-
-  if (selectedCollector) {
-    map.setView(
-      [selectedCollector.currentLocation.lat, selectedCollector.currentLocation.lng],
-      15,
-      { animate: true }
-    );
-  } else if (collectors.length > 0) {
-    const bounds = L.latLngBounds(
-      collectors.map(c => [c.currentLocation.lat, c.currentLocation.lng])
-    );
-    map.fitBounds(bounds, { padding: [50, 50], animate: true });
-  }
-
-  return null;
-};
-
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -117,127 +98,184 @@ const formatCurrency = (amount: number) => {
 };
 
 export const MapView = ({ collectors, selectedCollector, onCollectorSelect, showClients = true }: MapViewProps) => {
-  // Ahmedabad center
-  const center: [number, number] = [23.0225, 72.5714];
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const markersRef = useRef<L.Marker[]>([]);
+  const clientMarkersRef = useRef<L.Marker[]>([]);
+  const polylineRef = useRef<L.Polyline | null>(null);
+  const [isMapReady, setIsMapReady] = useState(false);
+
+  // Initialize map
+  useEffect(() => {
+    if (!mapContainerRef.current || mapRef.current) return;
+
+    const center: L.LatLngTuple = [23.0225, 72.5714];
+    
+    const map = L.map(mapContainerRef.current, {
+      center,
+      zoom: 12,
+      zoomControl: true,
+    });
+
+    // Satellite tile layer
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      attribution: '&copy; Esri &mdash; Source: Esri, i-cubed, USDA, AEX, GeoEye, Getmapping'
+    }).addTo(map);
+
+    // Road labels overlay
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+      subdomains: 'abcd',
+    }).addTo(map);
+
+    mapRef.current = map;
+    setIsMapReady(true);
+
+    return () => {
+      map.remove();
+      mapRef.current = null;
+    };
+  }, []);
+
+  // Update markers when collectors change
+  useEffect(() => {
+    if (!mapRef.current || !isMapReady) return;
+
+    // Clear existing markers
+    markersRef.current.forEach(marker => marker.remove());
+    markersRef.current = [];
+    clientMarkersRef.current.forEach(marker => marker.remove());
+    clientMarkersRef.current = [];
+
+    // Add collector markers
+    collectors.forEach(collector => {
+      const marker = L.marker(
+        [collector.currentLocation.lat, collector.currentLocation.lng],
+        { icon: createCollectorIcon(collector.status) }
+      );
+
+      const popupContent = `
+        <div style="min-width: 200px; padding: 4px; font-family: system-ui, sans-serif;">
+          <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
+            <div style="width: 32px; height: 32px; border-radius: 50%; background: linear-gradient(135deg, #06b6d4, #0891b2); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px;">
+              ${collector.name.charAt(0)}
+            </div>
+            <div>
+              <h3 style="margin: 0; font-size: 14px; font-weight: 600; color: #f8fafc;">${collector.name}</h3>
+              <span style="display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; font-weight: 500; background: ${collector.status === 'active' ? 'rgba(34,197,94,0.2)' : collector.status === 'traveling' ? 'rgba(245,158,11,0.2)' : 'rgba(107,114,128,0.2)'}; color: ${collector.status === 'active' ? '#22c55e' : collector.status === 'traveling' ? '#f59e0b' : '#6b7280'};">
+                ${collector.status}
+              </span>
+            </div>
+          </div>
+          <p style="margin: 0; font-size: 12px; color: #94a3b8;">📍 ${collector.currentLocation.address || 'Unknown location'}</p>
+          ${collector.currentTask ? `
+            <div style="border-top: 1px solid #334155; padding-top: 8px; margin-top: 8px;">
+              <p style="margin: 0 0 4px 0; font-size: 11px; font-weight: 500; color: #f8fafc;">Current Task:</p>
+              <p style="margin: 0; font-size: 11px; color: #94a3b8;">${collector.currentTask.client.companyName}</p>
+              <p style="margin: 4px 0 0 0; font-size: 12px; font-weight: 600; color: #06b6d4;">${formatCurrency(collector.currentTask.amountToCollect)}</p>
+            </div>
+          ` : ''}
+          <p style="margin: 8px 0 0 0; font-size: 10px; color: #64748b;">Last update: ${formatDistanceToNow(collector.currentLocation.timestamp, { addSuffix: true })}</p>
+        </div>
+      `;
+
+      marker.bindPopup(popupContent, {
+        className: 'custom-popup',
+      });
+
+      marker.on('click', () => onCollectorSelect(collector));
+      marker.addTo(mapRef.current!);
+      markersRef.current.push(marker);
+    });
+
+    // Add client markers for current tasks
+    if (showClients) {
+      collectors
+        .filter(c => c.currentTask)
+        .forEach(collector => {
+          if (!collector.currentTask) return;
+          
+          const clientMarker = L.marker(
+            [collector.currentTask.client.location.lat, collector.currentTask.client.location.lng],
+            { icon: createClientIcon() }
+          );
+
+          const popupContent = `
+            <div style="min-width: 180px; padding: 4px; font-family: system-ui, sans-serif;">
+              <h3 style="margin: 0 0 4px 0; font-size: 14px; font-weight: 600; color: #f8fafc;">${collector.currentTask.client.companyName}</h3>
+              <p style="margin: 0; font-size: 12px; color: #94a3b8;">${collector.currentTask.client.name}</p>
+              <p style="margin: 4px 0 0 0; font-size: 11px; color: #94a3b8;">📍 ${collector.currentTask.client.address}</p>
+              <div style="border-top: 1px solid #334155; padding-top: 8px; margin-top: 8px;">
+                <p style="margin: 0 0 4px 0; font-size: 11px; font-weight: 500; color: #f8fafc;">Task:</p>
+                <p style="margin: 0; font-size: 11px; color: #94a3b8;">${collector.currentTask.description}</p>
+                <div style="display: flex; justify-content: space-between; margin-top: 4px;">
+                  <span style="font-size: 11px; color: #94a3b8;">To Collect:</span>
+                  <span style="font-size: 11px; font-weight: 600; color: #06b6d4;">${formatCurrency(collector.currentTask.amountToCollect)}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                  <span style="font-size: 11px; color: #94a3b8;">Collected:</span>
+                  <span style="font-size: 11px; font-weight: 600; color: #22c55e;">${formatCurrency(collector.currentTask.amountCollected)}</span>
+                </div>
+              </div>
+              <p style="margin: 8px 0 0 0; font-size: 10px; color: #64748b;">Assigned to: ${collector.name}</p>
+            </div>
+          `;
+
+          clientMarker.bindPopup(popupContent, {
+            className: 'custom-popup',
+          });
+          clientMarker.addTo(mapRef.current!);
+          clientMarkersRef.current.push(clientMarker);
+        });
+    }
+
+    // Fit bounds to all collectors
+    if (collectors.length > 0 && !selectedCollector) {
+      const bounds = L.latLngBounds(
+        collectors.map(c => [c.currentLocation.lat, c.currentLocation.lng] as L.LatLngTuple)
+      );
+      mapRef.current.fitBounds(bounds, { padding: [50, 50], animate: true });
+    }
+  }, [collectors, showClients, isMapReady, onCollectorSelect, selectedCollector]);
+
+  // Handle selected collector
+  useEffect(() => {
+    if (!mapRef.current || !isMapReady) return;
+
+    // Remove existing polyline
+    if (polylineRef.current) {
+      polylineRef.current.remove();
+      polylineRef.current = null;
+    }
+
+    if (selectedCollector) {
+      // Center on selected collector
+      mapRef.current.setView(
+        [selectedCollector.currentLocation.lat, selectedCollector.currentLocation.lng],
+        15,
+        { animate: true }
+      );
+
+      // Draw location history trail
+      if (selectedCollector.locationHistory.length > 1) {
+        const positions = selectedCollector.locationHistory.map(
+          h => [h.location.lat, h.location.lng] as L.LatLngTuple
+        );
+        polylineRef.current = L.polyline(positions, {
+          color: '#06b6d4',
+          weight: 3,
+          opacity: 0.7,
+          dashArray: '10, 10',
+        }).addTo(mapRef.current);
+      }
+    }
+  }, [selectedCollector, isMapReady]);
 
   return (
-    <MapContainer
-      center={center}
-      zoom={12}
-      className="map-container w-full h-full"
-      zoomControl={true}
-    >
-      {/* Satellite tile layer */}
-      <TileLayer
-        attribution='&copy; Esri &mdash; Source: Esri, i-cubed, USDA, AEX, GeoEye, Getmapping'
-        url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-      />
-      {/* Road labels overlay */}
-      <TileLayer
-        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-        url="https://stamen-tiles.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}.png"
-        opacity={0.7}
-      />
-
-      {/* Location history trails for selected collector */}
-      {selectedCollector && selectedCollector.locationHistory.length > 1 && (
-        <Polyline
-          positions={selectedCollector.locationHistory.map(h => [h.location.lat, h.location.lng] as [number, number])}
-          pathOptions={{
-            color: '#06b6d4',
-            weight: 3,
-            opacity: 0.7,
-            dashArray: '10, 10',
-          }}
-        />
-      )}
-
-      {/* Collector markers */}
-      {collectors.map(collector => (
-        <Marker
-          key={collector.id}
-          position={[collector.currentLocation.lat, collector.currentLocation.lng]}
-          icon={createCollectorIcon(collector.status)}
-          eventHandlers={{
-            click: () => onCollectorSelect(collector),
-          }}
-        >
-          <Popup>
-            <div className="min-w-[200px] p-1">
-              <div className="flex items-center gap-2 mb-2">
-                <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-sm font-bold">
-                  {collector.name.charAt(0)}
-                </div>
-                <div>
-                  <h3 className="font-semibold text-foreground">{collector.name}</h3>
-                  <span className={`status-badge status-${collector.status}`}>
-                    {collector.status}
-                  </span>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground mb-2">
-                📍 {collector.currentLocation.address}
-              </p>
-              {collector.currentTask && (
-                <div className="border-t border-border pt-2 mt-2">
-                  <p className="text-xs font-medium">Current Task:</p>
-                  <p className="text-xs text-muted-foreground">
-                    {collector.currentTask.client.companyName}
-                  </p>
-                  <p className="text-xs text-primary font-medium">
-                    {formatCurrency(collector.currentTask.amountToCollect)}
-                  </p>
-                </div>
-              )}
-              <p className="text-xs text-muted-foreground mt-2">
-                Last update: {formatDistanceToNow(collector.currentLocation.timestamp, { addSuffix: true })}
-              </p>
-            </div>
-          </Popup>
-        </Marker>
-      ))}
-
-      {/* Client markers for current tasks */}
-      {showClients && collectors
-        .filter(c => c.currentTask)
-        .map(collector => collector.currentTask && (
-          <Marker
-            key={`client-${collector.currentTask.clientId}`}
-            position={[collector.currentTask.client.location.lat, collector.currentTask.client.location.lng]}
-            icon={createClientIcon()}
-          >
-            <Popup>
-              <div className="min-w-[180px] p-1">
-                <h3 className="font-semibold text-foreground">{collector.currentTask.client.companyName}</h3>
-                <p className="text-xs text-muted-foreground">{collector.currentTask.client.name}</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  📍 {collector.currentTask.client.address}
-                </p>
-                <div className="border-t border-border pt-2 mt-2">
-                  <p className="text-xs font-medium">Task:</p>
-                  <p className="text-xs text-muted-foreground">{collector.currentTask.description}</p>
-                  <div className="flex justify-between mt-1">
-                    <span className="text-xs">To Collect:</span>
-                    <span className="text-xs font-semibold text-primary">
-                      {formatCurrency(collector.currentTask.amountToCollect)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-xs">Collected:</span>
-                    <span className="text-xs font-semibold text-status-active">
-                      {formatCurrency(collector.currentTask.amountCollected)}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-xs text-muted-foreground mt-2">
-                  Assigned to: {collector.name}
-                </p>
-              </div>
-            </Popup>
-          </Marker>
-        ))}
-
-      <FitBounds collectors={collectors} selectedCollector={selectedCollector} />
-    </MapContainer>
+    <div 
+      ref={mapContainerRef} 
+      className="w-full h-full"
+      style={{ background: 'hsl(220 20% 8%)' }}
+    />
   );
 };
