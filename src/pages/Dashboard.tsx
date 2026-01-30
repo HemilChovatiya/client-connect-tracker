@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { MapView } from '@/components/MapView';
 import { CollectorCard } from '@/components/CollectorCard';
 import { CollectorDetail } from '@/components/CollectorDetail';
@@ -10,7 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MapPin, Search, Users, RefreshCw, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
+import { MapPin, Search, Users, RefreshCw, Calendar, ChevronLeft, ChevronRight, Shield } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const Dashboard = () => {
@@ -71,6 +72,13 @@ const Dashboard = () => {
           <Button variant="outline" size="icon" onClick={handleRefresh} className="bg-secondary/50">
             <RefreshCw className="w-4 h-4" />
           </Button>
+
+          <Link to="/superadmin">
+            <Button variant="default" size="sm" className="gap-2">
+              <Shield className="w-4 h-4" />
+              Superadmin
+            </Button>
+          </Link>
         </div>
       </header>
 
