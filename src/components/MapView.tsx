@@ -2,19 +2,23 @@ import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Collector } from '@/types/tracker';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, format } from 'date-fns';
+import { Button } from '@/components/ui/button';
+import { Route, Eye, EyeOff } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 // Fix for default marker icons
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 
+const statusColors = {
+  active: '#22c55e',
+  traveling: '#f59e0b',
+  offline: '#ef4444',
+  idle: '#6b7280',
+};
+
 const createCollectorIcon = (status: string) => {
-  const colors = {
-    active: '#22c55e',
-    traveling: '#f59e0b',
-    offline: '#ef4444',
-    idle: '#6b7280',
-  };
-  const color = colors[status as keyof typeof colors] || colors.idle;
+  const color = statusColors[status as keyof typeof statusColors] || statusColors.idle;
 
   return L.divIcon({
     className: 'custom-collector-marker',
@@ -82,6 +86,47 @@ const createClientIcon = () => {
   });
 };
 
+const createHistoryMarker = (index: number, isStart: boolean, isEnd: boolean, hasClient: boolean) => {
+  let color = '#64748b';
+  let size = 12;
+  let label = '';
+  
+  if (isStart) {
+    color = '#22c55e';
+    size = 16;
+    label = 'S';
+  } else if (isEnd) {
+    color = '#06b6d4';
+    size = 16;
+    label = 'E';
+  } else if (hasClient) {
+    color = '#f59e0b';
+    size = 14;
+  }
+
+  return L.divIcon({
+    className: 'history-marker',
+    html: `
+      <div style="
+        width: ${size}px;
+        height: ${size}px;
+        background: ${color};
+        border: 2px solid white;
+        border-radius: 50%;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 8px;
+        font-weight: bold;
+        color: white;
+      ">${label}</div>
+    `,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  });
+};
+
 interface MapViewProps {
   collectors: Collector[];
   selectedCollector: Collector | null;
@@ -103,7 +148,10 @@ export const MapView = ({ collectors, selectedCollector, onCollectorSelect, show
   const markersRef = useRef<L.Marker[]>([]);
   const clientMarkersRef = useRef<L.Marker[]>([]);
   const polylineRef = useRef<L.Polyline | null>(null);
+  const historyMarkersRef = useRef<L.Marker[]>([]);
+  const animatedPolylineRef = useRef<L.Polyline | null>(null);
   const [isMapReady, setIsMapReady] = useState(false);
+  const [showRouteHistory, setShowRouteHistory] = useState(true);
 
   // Initialize map
   useEffect(() => {
@@ -238,15 +286,21 @@ export const MapView = ({ collectors, selectedCollector, onCollectorSelect, show
     }
   }, [collectors, showClients, isMapReady, onCollectorSelect, selectedCollector]);
 
-  // Handle selected collector
+  // Handle selected collector and route history
   useEffect(() => {
     if (!mapRef.current || !isMapReady) return;
 
-    // Remove existing polyline
+    // Clear existing route elements
     if (polylineRef.current) {
       polylineRef.current.remove();
       polylineRef.current = null;
     }
+    if (animatedPolylineRef.current) {
+      animatedPolylineRef.current.remove();
+      animatedPolylineRef.current = null;
+    }
+    historyMarkersRef.current.forEach(marker => marker.remove());
+    historyMarkersRef.current = [];
 
     if (selectedCollector) {
       // Center on selected collector
@@ -256,26 +310,203 @@ export const MapView = ({ collectors, selectedCollector, onCollectorSelect, show
         { animate: true }
       );
 
-      // Draw location history trail
-      if (selectedCollector.locationHistory.length > 1) {
+      // Draw location history trail with route visualization
+      if (showRouteHistory && selectedCollector.locationHistory.length > 0) {
         const positions = selectedCollector.locationHistory.map(
           h => [h.location.lat, h.location.lng] as L.LatLngTuple
         );
+        
+        // Add current location to positions
+        positions.push([selectedCollector.currentLocation.lat, selectedCollector.currentLocation.lng]);
+
+        // Background trail (shadow effect)
+        const shadowPolyline = L.polyline(positions, {
+          color: '#000000',
+          weight: 6,
+          opacity: 0.3,
+        }).addTo(mapRef.current);
+        historyMarkersRef.current.push(shadowPolyline as any);
+
+        // Main route line with gradient effect
         polylineRef.current = L.polyline(positions, {
           color: '#06b6d4',
-          weight: 3,
-          opacity: 0.7,
-          dashArray: '10, 10',
+          weight: 4,
+          opacity: 0.9,
         }).addTo(mapRef.current);
+
+        // Animated dashed overlay for direction indication
+        animatedPolylineRef.current = L.polyline(positions, {
+          color: '#22c55e',
+          weight: 2,
+          opacity: 0.8,
+          dashArray: '10, 20',
+          className: 'animated-route',
+        }).addTo(mapRef.current);
+
+        // Add history point markers with popups
+        selectedCollector.locationHistory.forEach((history, index) => {
+          const isStart = index === 0;
+          const isEnd = false;
+          const hasClient = !!history.clientVisited;
+
+          const historyMarker = L.marker(
+            [history.location.lat, history.location.lng],
+            { icon: createHistoryMarker(index, isStart, isEnd, hasClient) }
+          );
+
+          const popupContent = `
+            <div style="min-width: 160px; padding: 4px; font-family: system-ui, sans-serif;">
+              <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+                <div style="
+                  width: 20px; height: 20px; border-radius: 50%;
+                  background: ${isStart ? '#22c55e' : hasClient ? '#f59e0b' : '#64748b'};
+                  display: flex; align-items: center; justify-content: center;
+                  font-size: 10px; color: white; font-weight: bold;
+                ">${isStart ? 'S' : index + 1}</div>
+                <span style="font-size: 12px; font-weight: 600; color: #f8fafc;">
+                  ${isStart ? 'Start Point' : `Stop ${index + 1}`}
+                </span>
+              </div>
+              <p style="margin: 0 0 4px 0; font-size: 11px; color: #94a3b8;">
+                📍 ${history.location.address || 'Unknown location'}
+              </p>
+              <p style="margin: 0; font-size: 10px; color: #64748b;">
+                🕐 ${format(history.location.timestamp, 'hh:mm a')}
+              </p>
+              ${history.duration > 0 ? `
+                <p style="margin: 4px 0 0 0; font-size: 10px; color: #06b6d4;">
+                  ⏱️ Stayed ${history.duration} min
+                </p>
+              ` : ''}
+              ${history.clientVisited ? `
+                <div style="border-top: 1px solid #334155; margin-top: 6px; padding-top: 6px;">
+                  <p style="margin: 0; font-size: 10px; font-weight: 500; color: #f59e0b;">
+                    🏢 ${history.clientVisited.companyName}
+                  </p>
+                  <p style="margin: 2px 0 0 0; font-size: 9px; color: #94a3b8;">
+                    ${history.clientVisited.name}
+                  </p>
+                </div>
+              ` : ''}
+            </div>
+          `;
+
+          historyMarker.bindPopup(popupContent, { className: 'custom-popup' });
+          historyMarker.addTo(mapRef.current!);
+          historyMarkersRef.current.push(historyMarker);
+        });
+
+        // Add current location marker as endpoint
+        const currentMarker = L.marker(
+          [selectedCollector.currentLocation.lat, selectedCollector.currentLocation.lng],
+          { icon: createHistoryMarker(selectedCollector.locationHistory.length, false, true, false) }
+        );
+        currentMarker.bindPopup(`
+          <div style="min-width: 140px; padding: 4px; font-family: system-ui, sans-serif;">
+            <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
+              <div style="
+                width: 20px; height: 20px; border-radius: 50%;
+                background: #06b6d4;
+                display: flex; align-items: center; justify-content: center;
+                font-size: 10px; color: white; font-weight: bold;
+              ">E</div>
+              <span style="font-size: 12px; font-weight: 600; color: #f8fafc;">Current Location</span>
+            </div>
+            <p style="margin: 0; font-size: 11px; color: #94a3b8;">
+              📍 ${selectedCollector.currentLocation.address || 'Unknown'}
+            </p>
+            <p style="margin: 4px 0 0 0; font-size: 10px; color: #64748b;">
+              Updated ${formatDistanceToNow(selectedCollector.currentLocation.timestamp, { addSuffix: true })}
+            </p>
+          </div>
+        `, { className: 'custom-popup' });
+        currentMarker.addTo(mapRef.current!);
+        historyMarkersRef.current.push(currentMarker);
+
+        // Fit bounds to show entire route
+        const allPositions = [
+          ...positions,
+        ];
+        const bounds = L.latLngBounds(allPositions);
+        mapRef.current.fitBounds(bounds, { padding: [60, 60], animate: true });
       }
     }
-  }, [selectedCollector, isMapReady]);
+  }, [selectedCollector, isMapReady, showRouteHistory]);
 
   return (
-    <div 
-      ref={mapContainerRef} 
-      className="w-full h-full"
-      style={{ background: 'hsl(220 20% 8%)' }}
-    />
+    <div className="relative w-full h-full">
+      <div 
+        ref={mapContainerRef} 
+        className="w-full h-full"
+        style={{ background: 'hsl(220 20% 8%)' }}
+      />
+      
+      {/* Route History Toggle */}
+      {selectedCollector && (
+        <div className="absolute top-4 right-4 z-[1000] flex flex-col gap-2">
+          <Button
+            variant={showRouteHistory ? "default" : "secondary"}
+            size="sm"
+            onClick={() => setShowRouteHistory(!showRouteHistory)}
+            className={cn(
+              "gap-2 shadow-lg",
+              showRouteHistory && "bg-primary text-primary-foreground"
+            )}
+          >
+            <Route className="w-4 h-4" />
+            Route History
+            {showRouteHistory ? (
+              <Eye className="w-3 h-3" />
+            ) : (
+              <EyeOff className="w-3 h-3" />
+            )}
+          </Button>
+          
+          {showRouteHistory && selectedCollector.locationHistory.length > 0 && (
+            <div className="bg-card/90 backdrop-blur-sm rounded-lg p-3 border border-border shadow-lg">
+              <p className="text-xs font-medium text-foreground mb-2">Route Legend</p>
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-[#22c55e]" />
+                  <span className="text-xs text-muted-foreground">Start Point</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-[#f59e0b]" />
+                  <span className="text-xs text-muted-foreground">Client Visit</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-[#64748b]" />
+                  <span className="text-xs text-muted-foreground">Stop Point</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-3 h-3 rounded-full bg-[#06b6d4]" />
+                  <span className="text-xs text-muted-foreground">Current Location</span>
+                </div>
+                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border">
+                  <div className="w-6 h-0.5 bg-[#06b6d4]" />
+                  <span className="text-xs text-muted-foreground">Route Path</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      
+      {/* CSS for animated route */}
+      <style>{`
+        .animated-route {
+          animation: dash 20s linear infinite;
+        }
+        @keyframes dash {
+          to {
+            stroke-dashoffset: -1000;
+          }
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(1.2); }
+        }
+      `}</style>
+    </div>
   );
 };
