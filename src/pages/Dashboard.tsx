@@ -4,38 +4,35 @@ import { MapView } from '@/components/MapView';
 import { CollectorCard } from '@/components/CollectorCard';
 import { CollectorDetail } from '@/components/CollectorDetail';
 import { StatsOverview } from '@/components/StatsOverview';
-import { mockCollectors, getSummaryStats } from '@/data/mockData';
-import { FINANCIAL_YEARS } from '@/types/tracker';
+import { useTrackerData } from '@/hooks/useTrackerData';
 import { Collector } from '@/types/tracker';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { MapPin, Search, Users, RefreshCw, Calendar, ChevronLeft, ChevronRight, Shield } from 'lucide-react';
+import { MapPin, Search, Users, RefreshCw, Calendar, ChevronLeft, ChevronRight, Shield, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const Dashboard = () => {
-  const [selectedYear, setSelectedYear] = useState('FY2024-25');
+  const [selectedYearId, setSelectedYearId] = useState<string>('');
   const [selectedCollector, setSelectedCollector] = useState<Collector | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
-  const stats = useMemo(() => getSummaryStats(selectedYear), [selectedYear]);
+  const { collectors, financialYears, stats, isLoading, refetchAll } = useTrackerData(selectedYearId || undefined);
+
+  // Auto-select first financial year
+  const effectiveYearId = selectedYearId || financialYears[0]?.id || '';
 
   const filteredCollectors = useMemo(() => {
-    return mockCollectors.filter(collector => {
+    return collectors.filter(collector => {
       const matchesSearch = collector.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         collector.currentLocation.address?.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesStatus = statusFilter === 'all' || collector.status === statusFilter;
       return matchesSearch && matchesStatus;
     });
-  }, [searchQuery, statusFilter]);
-
-  const handleRefresh = () => {
-    // In real app, this would fetch new data
-    console.log('Refreshing data...');
-  };
+  }, [collectors, searchQuery, statusFilter]);
 
   return (
     <div className="h-screen w-screen flex flex-col bg-background overflow-hidden">
@@ -55,12 +52,12 @@ const Dashboard = () => {
           {/* Financial Year Selector */}
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-muted-foreground" />
-            <Select value={selectedYear} onValueChange={setSelectedYear}>
-              <SelectTrigger className="w-[140px] bg-secondary/50 border-border">
-                <SelectValue />
+            <Select value={effectiveYearId} onValueChange={setSelectedYearId}>
+              <SelectTrigger className="w-[180px] bg-secondary/50 border-border">
+                <SelectValue placeholder="Select FY" />
               </SelectTrigger>
               <SelectContent>
-                {FINANCIAL_YEARS.map(fy => (
+                {financialYears.map(fy => (
                   <SelectItem key={fy.id} value={fy.id}>
                     {fy.label}
                   </SelectItem>
@@ -69,7 +66,7 @@ const Dashboard = () => {
             </Select>
           </div>
 
-          <Button variant="outline" size="icon" onClick={handleRefresh} className="bg-secondary/50">
+          <Button variant="outline" size="icon" onClick={refetchAll} className="bg-secondary/50">
             <RefreshCw className="w-4 h-4" />
           </Button>
 
@@ -143,16 +140,26 @@ const Dashboard = () => {
           </div>
           <ScrollArea className="flex-1 scrollbar-thin">
             <div className="p-3 space-y-3">
-              {filteredCollectors.map(collector => (
-                <CollectorCard
-                  key={collector.id}
-                  collector={collector}
-                  isSelected={selectedCollector?.id === collector.id}
-                  onClick={() => setSelectedCollector(
-                    selectedCollector?.id === collector.id ? null : collector
-                  )}
-                />
-              ))}
+              {isLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                </div>
+              ) : filteredCollectors.length === 0 ? (
+                <p className="text-center text-muted-foreground text-sm py-8">
+                  No collectors found
+                </p>
+              ) : (
+                filteredCollectors.map(collector => (
+                  <CollectorCard
+                    key={collector.id}
+                    collector={collector}
+                    isSelected={selectedCollector?.id === collector.id}
+                    onClick={() => setSelectedCollector(
+                      selectedCollector?.id === collector.id ? null : collector
+                    )}
+                  />
+                ))
+              )}
             </div>
           </ScrollArea>
         </div>
